@@ -609,12 +609,9 @@ app.get("/", (c) =>
 app.use(cacheConfigSetter(BASE_PATH.length));
 
 // ========== API ROUTES ==========
-app.route(`${BASE_PATH}/hianime`, hianimeRouter);
 app.route(`${BASE_PATH}/hindidubbed`, hindiDubbedRouter);
 app.route(`${BASE_PATH}/watchaw`, watchawRouter);
 app.route(`${BASE_PATH}/animeya`, animeyaRouter);
-app.route(`${BASE_PATH}/anime`, animeRouter);
-app.route(`${BASE_PATH}/anime-api`, animeApiRouter);
 app.route(`${BASE_PATH}/animelok`, animelokRouter);
 app.route(`${BASE_PATH}/desidubanime`, desidubanimeRouter);
 
