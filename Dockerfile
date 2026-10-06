@@ -4,11 +4,17 @@ FROM node:20-alpine AS base
 FROM base AS deps
 WORKDIR /app
 
+# Install git for GitHub dependencies (@consumet/extensions)
+RUN apk add --no-cache git \
+    && git config --global url."https://github.com/".insteadOf "git+ssh://git@github.com/" \
+    && git config --global url."https://github.com/".insteadOf "ssh://git@github.com/" \
+    && git config --global url."https://github.com/".insteadOf "git@github.com:"
+
 # Copy package files
 COPY package*.json ./
 
 # Install dependencies
-RUN npm ci --only=production
+RUN npm ci --omit=dev
 
 # Rebuild the source code only when needed
 FROM base AS builder
