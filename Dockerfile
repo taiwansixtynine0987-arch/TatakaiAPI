@@ -4,8 +4,8 @@ FROM node:20-alpine AS base
 FROM base AS deps
 WORKDIR /app
 
-# Install git for GitHub dependencies (@consumet/extensions)
-RUN apk add --no-cache git \
+# Install git and ssh for GitHub dependencies (@consumet/extensions)
+RUN apk add --no-cache git openssh-client \
     && git config --global url."https://github.com/".insteadOf "git+ssh://git@github.com/" \
     && git config --global url."https://github.com/".insteadOf "ssh://git@github.com/" \
     && git config --global url."https://github.com/".insteadOf "git@github.com:"
@@ -13,8 +13,8 @@ RUN apk add --no-cache git \
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
-RUN npm ci --omit=dev
+# Install dependencies (npm install because lockfile is regenerated)
+RUN npm install --omit=dev
 
 # Rebuild the source code only when needed
 FROM base AS builder
