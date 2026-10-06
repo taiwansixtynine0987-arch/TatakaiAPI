@@ -17,12 +17,9 @@ import { logging } from "./middleware/logging.js";
 import { cacheConfigSetter, cacheControlHeaders } from "./middleware/cache.js";
 
 // Import routes
-import { hianimeRouter } from "./routes/hianime/index.js";
 import { hindiDubbedRouter } from "./routes/animehindidubbed/index.js";
 import { watchawRouter } from "./routes/watchanimeworld/index.js";
 import { animeyaRouter } from "./routes/animeya/index.js";
-import { animeRouter } from "./routes/anime/index.js";
-import { animeApiRouter } from "./routes/anime-api/index.js";
 import { animelokRouter } from "./routes/animelok/index.js";
 import { desidubanimeRouter } from "./routes/desidubanime/index.js";
 
