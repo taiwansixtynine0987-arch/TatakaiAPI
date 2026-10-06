@@ -1,10 +1,12 @@
+
+
 FROM node:20-alpine AS base
 
 # Install dependencies only when needed
 FROM base AS deps
 WORKDIR /app
 
-# Install git and ssh for GitHub dependencies (@consumet/extensions)
+# Install git and ssh for GitHub dependencies
 RUN apk add --no-cache git openssh-client \
     && git config --global url."https://github.com/".insteadOf "git+ssh://git@github.com/" \
     && git config --global url."https://github.com/".insteadOf "ssh://git@github.com/" \
@@ -13,8 +15,8 @@ RUN apk add --no-cache git openssh-client \
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies (npm install because lockfile is regenerated)
-RUN npm install --omit=dev
+# Install ALL dependencies (including dev) for build stage
+RUN npm install
 
 # Rebuild the source code only when needed
 FROM base AS builder
@@ -22,8 +24,11 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# Build application
+# Build application (uses tsc from devDependencies)
 RUN npm run build
+
+# Prune devDependencies for production image
+RUN npm prune --production
 
 # Production image
 FROM base AS runner
