@@ -42,7 +42,6 @@ function decodeEmbedId(raw: string): { server: string; url: string } | null {
 }
 
 // ========== HOME ==========
-// (unchanged — keep as-is from your existing code)
 desidubanimeRouter.get("/home", async (c) => {
     const cacheConfig = c.get("CACHE_CONFIG");
 
@@ -106,39 +105,86 @@ desidubanimeRouter.get("/home", async (c) => {
     return c.json({ provider: "Desidubanime", status: 200, data });
 });
 
-// ========== SEARCH ==========
-// (unchanged)
+// ========== SEARCH (FIXED — uses WP REST API endpoint) ==========
 desidubanimeRouter.get("/search/:query", async (c) => {
     const cacheConfig = c.get("CACHE_CONFIG");
     const query = c.req.param("query");
-    const page = c.req.query("page") || "1";
 
-    const data = await cache.getOrSet(async () => {
-        const searchUrl = `${BASE_URL}/page/${page}/?s=${encodeURIComponent(query)}`;
-        const html = await fetchHtml(searchUrl);
-        const $ = cheerio.load(html);
+    try {
+        const data = await cache.getOrSet(async () => {
+            // ✅ Working endpoint: WordPress Kiranime REST API
+            const searchUrl = `${BASE_URL}/wp-json/kiranime/v1/anime/search?query=${encodeURIComponent(query)}`;
+            const raw = await fetchHtml(searchUrl);
 
-        const results: any[] = [];
-
-        $("div#archive-content article").each((_, article) => {
-            const title = $(article).find("h3, .entry-title").text().trim();
-            const link = $(article).find("a").attr("href");
-            const poster = $(article).find("img").attr("src") || $(article).find("img").attr("data-src");
-            const id = link?.split("/anime/")[1]?.replace(/\/$/, "");
-
-            if (title && link) {
-                const finalId = id || link.split("/").filter(Boolean).pop();
-                results.push({ id: finalId, title, poster, url: link });
+            // Response shape: { "result": "<HTML fragment>" }
+            let htmlFragment = "";
+            try {
+                const parsed = JSON.parse(raw);
+                htmlFragment = parsed?.result || "";
+            } catch {
+                htmlFragment = raw;
             }
-        });
 
-        return { results, page: parseInt(page), hasNextPage: $(".pagination .next").length > 0 };
-    }, cacheConfig.key, cacheConfig.duration);
+            const $ = cheerio.load(htmlFragment);
+            const results: any[] = [];
 
-    return c.json({ provider: "Desidubanime", status: 200, data });
+            // Each result is an <a href=".../anime/{slug}/"> containing img + h3 span
+            $("a[href*='/anime/']").each((_, link) => {
+                const href = $(link).attr("href") || "";
+                const slugMatch = href.match(/\/anime\/([^/]+)\//);
+                if (!slugMatch) return;
+
+                const slug = slugMatch[1];
+                if (!slug) return;
+
+                // Skip duplicates
+                if (results.find((r) => r.id === slug)) return;
+
+                const img = $(link).find("img").first();
+                const poster = img.attr("src") || img.attr("data-src") || "";
+                const title =
+                    $(link).find("h3 span").first().text().trim() ||
+                    img.attr("alt") ||
+                    slug;
+
+                // Detect type (TV / MOVIE / OVA / ONA) from spans
+                let type = "TV";
+                $(link).find("span").each((_, el) => {
+                    const t = $(el).text().trim();
+                    if (["TV", "MOVIE", "OVA", "ONA", "SPECIAL"].includes(t)) {
+                        type = t;
+                        return false;
+                    }
+                });
+
+                results.push({
+                    id: slug,
+                    title,
+                    poster,
+                    type,
+                    url: href,
+                });
+            });
+
+            return {
+                results,
+                query,
+                totalFound: results.length,
+            };
+        }, cacheConfig.key, cacheConfig.duration);
+
+        return c.json({ provider: "Desidubanime", status: 200, data });
+    } catch (e: any) {
+        log.error(`Error in Desidubanime search: ${e.message}`);
+        const status = e.status || 500;
+        return c.json(
+            { provider: "Desidubanime", status, message: e.message || "Internal Server Error" },
+            status
+        );
+    }
 });
 
-// ========== ANIME INFO (FIXED) ==========
+// ========== ANIME INFO (unchanged) ==========
 desidubanimeRouter.get("/anime/:id", async (c) => {
     const cacheConfig = c.get("CACHE_CONFIG");
     const id = c.req.param("id");
@@ -181,6 +227,22 @@ desidubanimeRouter.get("/anime/:id", async (c) => {
             }
         });
 
+        // Fallback: some anime have a single /watch/{slug}/ URL (movies)
+        if (epMap.size === 0) {
+            const watchLink = $(`a[href*='/watch/']`).first().attr("href");
+            if (watchLink) {
+                const slug = watchLink.split("/watch/")[1]?.replace(/\/$/, "");
+                if (slug) {
+                    epMap.set(1, {
+                        number: 1,
+                        title: "Full Movie",
+                        url: watchLink,
+                        id: slug,
+                    });
+                }
+            }
+        }
+
         const episodes = Array.from(epMap.values()).sort((a, b) => a.number - b.number);
 
         return { id, title, description, poster, episodes };
@@ -189,7 +251,7 @@ desidubanimeRouter.get("/anime/:id", async (c) => {
     return c.json({ provider: "Desidubanime", status: 200, data });
 });
 
-// ========== WATCH (FIXED) ==========
+// ========== WATCH (unchanged) ==========
 desidubanimeRouter.get("/watch/:id", async (c) => {
     const cacheConfig = c.get("CACHE_CONFIG");
     const id = c.req.param("id");
@@ -226,7 +288,7 @@ desidubanimeRouter.get("/watch/:id", async (c) => {
                 }
             });
 
-            // Fallback: direct iframes (in case site structure changes again)
+            // Fallback: direct iframes
             if (sources.length === 0) {
                 log.debug("No data-embed-id found, falling back to iframes");
                 $("iframe").each((_, iframe) => {
