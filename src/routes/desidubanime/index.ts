@@ -27,7 +27,22 @@ async function fetchHtml(url: string): Promise<string> {
     return response.text();
 }
 
+// Decode "base64(serverName):base64(embedUrl)" format
+function decodeEmbedId(raw: string): { server: string; url: string } | null {
+    try {
+        const [nameB64, urlB64] = raw.split(":");
+        if (!nameB64 || !urlB64) return null;
+        const server = Buffer.from(nameB64, "base64").toString("utf-8");
+        const url = Buffer.from(urlB64, "base64").toString("utf-8");
+        return { server, url };
+    } catch (e: any) {
+        log.warn(`Failed to decode embed-id: ${raw} — ${e.message}`);
+        return null;
+    }
+}
+
 // ========== HOME ==========
+// (unchanged — keep as-is from your existing code)
 desidubanimeRouter.get("/home", async (c) => {
     const cacheConfig = c.get("CACHE_CONFIG");
 
@@ -39,7 +54,6 @@ desidubanimeRouter.get("/home", async (c) => {
         const trending: any[] = [];
         const latest: any[] = [];
 
-        // Spotlight
         $(".swiper-slide").each((_, slide) => {
             const title = $(slide).find("h2 span[data-nt-title], h2 span[data-en-title]").first().text().trim();
             const description = $(slide).find(".text-\\[13px\\].line-clamp-2").text().trim();
@@ -48,12 +62,10 @@ desidubanimeRouter.get("/home", async (c) => {
             const id = link?.split("/anime/")[1]?.replace(/\/$/, "");
 
             if (title && id) {
-                const isDub = true;
-                spotlight.push({ id, title, description, poster, url: link, isDub });
+                spotlight.push({ id, title, description, poster, url: link, isDub: true });
             }
         });
 
-        // Trending
         $(".swiper-trending .swiper-slide").each((_, slide) => {
             const title = $(slide).find("span[data-nt-title], span[data-en-title]").first().text().trim();
             const poster = $(slide).find("img").attr("data-src") || $(slide).find("img").attr("src");
@@ -66,7 +78,6 @@ desidubanimeRouter.get("/home", async (c) => {
             }
         });
 
-        // Latest/Sections
         $("section").each((_, section) => {
             const sectionTitle = $(section).find("h2").text().trim();
             if (sectionTitle.includes("Trending") || sectionTitle.includes("Spotlight")) return;
@@ -96,6 +107,7 @@ desidubanimeRouter.get("/home", async (c) => {
 });
 
 // ========== SEARCH ==========
+// (unchanged)
 desidubanimeRouter.get("/search/:query", async (c) => {
     const cacheConfig = c.get("CACHE_CONFIG");
     const query = c.req.param("query");
@@ -121,13 +133,12 @@ desidubanimeRouter.get("/search/:query", async (c) => {
         });
 
         return { results, page: parseInt(page), hasNextPage: $(".pagination .next").length > 0 };
-
     }, cacheConfig.key, cacheConfig.duration);
 
     return c.json({ provider: "Desidubanime", status: 200, data });
 });
 
-// ========== ANIME INFO ==========
+// ========== ANIME INFO (FIXED) ==========
 desidubanimeRouter.get("/anime/:id", async (c) => {
     const cacheConfig = c.get("CACHE_CONFIG");
     const id = c.req.param("id");
@@ -137,54 +148,48 @@ desidubanimeRouter.get("/anime/:id", async (c) => {
         const html = await fetchHtml(url);
         const $ = cheerio.load(html);
 
-        const title = $("h1.entry-title").text().trim();
-        const description = $(".entry-content p").first().text().trim();
-        const poster = $(".entry-content img").first().attr("src");
+        const title =
+            $("h1.entry-title").text().trim() ||
+            $("meta[property='og:title']").attr("content")?.trim() ||
+            id;
 
-        const episodes: any[] = [];
+        const description =
+            $("meta[name='description']").attr("content")?.trim() ||
+            $(".entry-content p").first().text().trim();
 
-        $(".episode-list-display-box .episode-list-item").each((_, item) => {
-            const href = $(item).attr("href");
-            const epNum = $(item).attr("data-episode-search-query");
-            const epTitle = $(item).find(".episode-list-item-title").text().trim();
-            const epUrlId = href?.split("/watch/")[1]?.replace(/\/$/, "");
+        const poster =
+            $("meta[property='og:image']").attr("content") ||
+            $(".entry-content img").first().attr("src") ||
+            "";
 
-            if (href && epNum) {
-                episodes.push({
-                    number: parseInt(epNum),
-                    title: epTitle || `Episode ${epNum}`,
+        // Extract all episode links matching /watch/{id}-episode-N/
+        const epMap = new Map<number, any>();
+        $(`a[href*='/watch/${id}-episode-']`).each((_, el) => {
+            const href = $(el).attr("href");
+            if (!href) return;
+            const match = href.match(/episode-(\d+)/);
+            if (!match) return;
+            const num = parseInt(match[1]);
+            const epSlug = href.split("/watch/")[1]?.replace(/\/$/, "");
+            if (!epMap.has(num)) {
+                epMap.set(num, {
+                    number: num,
+                    title: `Episode ${num}`,
                     url: href,
-                    id: epUrlId
+                    id: epSlug,
                 });
             }
         });
 
-        if (episodes.length === 0) {
-            $(".swiper-slide a[href*='/watch/']").each((_, link) => {
-                const href = $(link).attr("href");
-                const text = $(link).find("span").text().trim();
-                if (href) {
-                    const epNumMatch = text.match(/(\d+)/);
-                    const epNum = epNumMatch ? parseInt(epNumMatch[1]) : episodes.length + 1;
-                    episodes.push({
-                        number: epNum,
-                        title: text,
-                        url: href,
-                        id: href.split("/watch/")[1]?.replace(/\/$/, "")
-                    });
-                }
-            });
-        }
+        const episodes = Array.from(epMap.values()).sort((a, b) => a.number - b.number);
 
-        const uniqueEpisodes = Array.from(new Map(episodes.map(e => [e.number, e])).values()).sort((a, b) => a.number - b.number);
-
-        return { id, title, description, poster, episodes: uniqueEpisodes };
+        return { id, title, description, poster, episodes };
     }, cacheConfig.key, cacheConfig.duration);
 
     return c.json({ provider: "Desidubanime", status: 200, data });
 });
 
-// ========== WATCH ==========
+// ========== WATCH (FIXED) ==========
 desidubanimeRouter.get("/watch/:id", async (c) => {
     const cacheConfig = c.get("CACHE_CONFIG");
     const id = c.req.param("id");
@@ -195,55 +200,45 @@ desidubanimeRouter.get("/watch/:id", async (c) => {
             log.info(`Fetching watch page: ${url}`);
 
             const html = await fetchHtml(url);
-            log.debug(`Fetched HTML length: ${html.length}`);
-
             const $ = cheerio.load(html);
 
-            let title = $("h1").text().trim();
+            let title = $("h1").first().text().trim();
             if (!title) {
                 title = $("title").text().replace(" - Desi Dub Anime", "").trim();
             }
-            log.debug(`Parsed title: ${title}`);
 
+            // Parse data-embed-id attributes → base64 decode
             const sources: any[] = [];
+            const seen = new Set<string>();
 
-            // 1. Check for iframes
-            log.debug("Checking for iframes...");
-            $("iframe").each((i, iframe) => {
-                const src = $(iframe).attr("src") || $(iframe).attr("data-src");
-                if (src && !src.includes("google") && !src.includes("disqus")) {
-                    log.debug(`Found iframe source: ${src}`);
-                    sources.push({ url: src, name: "Iframe", type: "iframe" });
+            $("[data-embed-id]").each((_, el) => {
+                const raw = $(el).attr("data-embed-id");
+                if (!raw || seen.has(raw)) return;
+                seen.add(raw);
+                const decoded = decodeEmbedId(raw);
+                if (decoded && decoded.url) {
+                    sources.push({
+                        server: decoded.server,
+                        url: decoded.url,
+                        type: "embed",
+                        referer: BASE_URL,
+                    });
                 }
             });
 
-            // 2. Check for js_configs (Encrypted)
-            log.debug("Checking for js_configs...");
-            let jsConfigMatch: RegExpMatchArray | null = null;
-
-            const scriptTags = $("script");
-            scriptTags.each((i, s) => {
-                try {
-                    const scriptContent = $(s).html();
-                    if (scriptContent && scriptContent.includes("var js_configs")) {
-                        // Safety: Limit search/match to reasonably sized strings if chunk available
-                        // Or just run match
-                        jsConfigMatch = scriptContent.match(/var js_configs\s*=\s*["']([^"']+)["']/);
-                        if (jsConfigMatch) {
-                            log.debug("Found js_configs match.");
-                            return false; // break loop
-                        }
+            // Fallback: direct iframes (in case site structure changes again)
+            if (sources.length === 0) {
+                log.debug("No data-embed-id found, falling back to iframes");
+                $("iframe").each((_, iframe) => {
+                    const src = $(iframe).attr("src");
+                    if (src && !src.includes("google") && !src.includes("disqus")) {
+                        sources.push({
+                            server: "Iframe",
+                            url: src,
+                            type: "embed",
+                            referer: BASE_URL,
+                        });
                     }
-                } catch (err: any) {
-                    log.warn(`Error parsing script ${i}: ${err.message}`);
-                }
-            });
-
-            if (jsConfigMatch) {
-                sources.push({
-                    type: "encrypted",
-                    config: jsConfigMatch[1],
-                    description: "Encrypted player config. Requires decryption (AES/Salted)."
                 });
             }
 
@@ -253,9 +248,11 @@ desidubanimeRouter.get("/watch/:id", async (c) => {
         return c.json({ provider: "Desidubanime", status: 200, data });
     } catch (e: any) {
         log.error(`Error in Desidubanime watch handler: ${e.message}`);
-        log.error(e.stack);
         const status = e.status || 500;
-        return c.json({ provider: "Desidubanime", status, message: e.message || "Internal Server Error" }, status);
+        return c.json(
+            { provider: "Desidubanime", status, message: e.message || "Internal Server Error" },
+            status
+        );
     }
 });
 
