@@ -105,18 +105,16 @@ desidubanimeRouter.get("/home", async (c) => {
     return c.json({ provider: "Desidubanime", status: 200, data });
 });
 
-// ========== SEARCH (FIXED — uses WP REST API endpoint) ==========
+// ========== SEARCH (uses WP REST API endpoint) ==========
 desidubanimeRouter.get("/search/:query", async (c) => {
     const cacheConfig = c.get("CACHE_CONFIG");
     const query = c.req.param("query");
 
     try {
         const data = await cache.getOrSet(async () => {
-            // ✅ Working endpoint: WordPress Kiranime REST API
             const searchUrl = `${BASE_URL}/wp-json/kiranime/v1/anime/search?query=${encodeURIComponent(query)}`;
             const raw = await fetchHtml(searchUrl);
 
-            // Response shape: { "result": "<HTML fragment>" }
             let htmlFragment = "";
             try {
                 const parsed = JSON.parse(raw);
@@ -128,7 +126,6 @@ desidubanimeRouter.get("/search/:query", async (c) => {
             const $ = cheerio.load(htmlFragment);
             const results: any[] = [];
 
-            // Each result is an <a href=".../anime/{slug}/"> containing img + h3 span
             $("a[href*='/anime/']").each((_, link) => {
                 const href = $(link).attr("href") || "";
                 const slugMatch = href.match(/\/anime\/([^/]+)\//);
@@ -137,7 +134,6 @@ desidubanimeRouter.get("/search/:query", async (c) => {
                 const slug = slugMatch[1];
                 if (!slug) return;
 
-                // Skip duplicates
                 if (results.find((r) => r.id === slug)) return;
 
                 const img = $(link).find("img").first();
@@ -147,7 +143,6 @@ desidubanimeRouter.get("/search/:query", async (c) => {
                     img.attr("alt") ||
                     slug;
 
-                // Detect type (TV / MOVIE / OVA / ONA) from spans
                 let type = "TV";
                 $(link).find("span").each((_, el) => {
                     const t = $(el).text().trim();
@@ -184,7 +179,7 @@ desidubanimeRouter.get("/search/:query", async (c) => {
     }
 });
 
-// ========== ANIME INFO (unchanged) ==========
+// ========== ANIME INFO (FIXED EPISODE EXTRACTION) ==========
 desidubanimeRouter.get("/anime/:id", async (c) => {
     const cacheConfig = c.get("CACHE_CONFIG");
     const id = c.req.param("id");
@@ -208,16 +203,22 @@ desidubanimeRouter.get("/anime/:id", async (c) => {
             $(".entry-content img").first().attr("src") ||
             "";
 
-        // Extract all episode links matching /watch/{id}-episode-N/
         const epMap = new Map<number, any>();
-        $(`a[href*='/watch/${id}-episode-']`).each((_, el) => {
+        
+        // 🎯 FIX: স্পেসিফিক আইডি না খুঁজে, পেজের সব /watch/ লিংক খুঁজবো
+        $("a[href*='/watch/']").each((_, el) => {
             const href = $(el).attr("href");
             if (!href) return;
-            const match = href.match(/episode-(\d+)/);
-            if (!match) return;
-            const num = parseInt(match[1]);
+            
+            // URL-এর শেষে episode-{number} আছে কি না চেক (যেমন: ...-episode-47/)
+            const match = href.match(/(?:-episode-|\/episode-)(\d+)\/?$/i);
+            if (!match) return; // এপিসোড নাম্বার না থাকলে স্কিপ করবো
+            
+            const num = parseInt(match[1], 10);
             const epSlug = href.split("/watch/")[1]?.replace(/\/$/, "");
-            if (!epMap.has(num)) {
+            
+            // ডুপ্লিকেট এপিসোড এড়াতে
+            if (epSlug && !epMap.has(num)) {
                 epMap.set(num, {
                     number: num,
                     title: `Episode ${num}`,
@@ -227,7 +228,7 @@ desidubanimeRouter.get("/anime/:id", async (c) => {
             }
         });
 
-        // Fallback: some anime have a single /watch/{slug}/ URL (movies)
+        // Fallback: যদি কোনো episode-N প্যাটার্ন না পাওয়া যায় (যেমন: মুভি বা স্পেশাল)
         if (epMap.size === 0) {
             const watchLink = $(`a[href*='/watch/']`).first().attr("href");
             if (watchLink) {
@@ -269,7 +270,6 @@ desidubanimeRouter.get("/watch/:id", async (c) => {
                 title = $("title").text().replace(" - Desi Dub Anime", "").trim();
             }
 
-            // Parse data-embed-id attributes → base64 decode
             const sources: any[] = [];
             const seen = new Set<string>();
 
@@ -288,7 +288,6 @@ desidubanimeRouter.get("/watch/:id", async (c) => {
                 }
             });
 
-            // Fallback: direct iframes
             if (sources.length === 0) {
                 log.debug("No data-embed-id found, falling back to iframes");
                 $("iframe").each((_, iframe) => {
