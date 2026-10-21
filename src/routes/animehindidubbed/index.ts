@@ -41,7 +41,7 @@ interface SearchResult {
 async function fetchWithRetry(url: string, retries = 3): Promise<Response> {
     let lastError: Error | null = null;
 
-    for (let i = 0; i <retries; i++) {
+    for (let i = 0; i < retries; i++) {
         try {
             const response = await fetch(url, {
                 headers: {
@@ -53,7 +53,7 @@ async function fetchWithRetry(url: string, retries = 3): Promise<Response> {
                 signal: AbortSignal.timeout(30000),
             });
 
-            if (response.ok || (response.status >= 400 && response.status <500 && response.status !== 429)) {
+            if (response.ok || (response.status >= 400 && response.status < 500 && response.status !== 429)) {
                 return response;
             }
 
@@ -63,7 +63,7 @@ async function fetchWithRetry(url: string, retries = 3): Promise<Response> {
             log.warn(`Fetch attempt ${i + 1} failed: ${lastError.message}`);
         }
 
-        if (i <retries - 1) {
+        if (i < retries - 1) {
             await new Promise(resolve => setTimeout(resolve, Math.pow(2, i) * 500));
         }
     }
@@ -81,24 +81,20 @@ async function searchAnime(title: string): Promise<SearchResult> {
 
     const animeList: SearchResult["animeList"] = [];
 
-    // Select common WordPress/Elementor post article structures
     $("article, .post, .type-post").each((_, element) => {
         const titleEl = $(element).find(".entry-title a, .post-title a, h2 a").first();
         const title = titleEl.text().trim();
         const link = titleEl.attr("href");
 
-        // Image usually in a figure or div
         const img = $(element).find("img").attr("src")
             || $(element).find("img").attr("data-src")
             || $(element).find("img").attr("data-lazy-src");
 
-        // Categories
         const categories: string[] = [];
         $(element).find(".cat-links a, .post-categories a").each((_, cat) => {
             categories.push($(cat).text().trim());
         });
 
-        // Slug extraction
         const slug = link?.match(/animehindidubbed\.in\/([^/]+)\/?/)?.[1];
 
         if (title && link && slug) {
@@ -155,20 +151,24 @@ async function getAnimePage(slug: string): Promise<AnimePageData> {
                     try {
                         const serverData = JSON.parse(serverVideosStr);
 
-                        if (serverData.filemoon) servers.filemoon = serverData.filemoon;
+                        // 🎯 FIX: ওয়েবসাইটে "bysewihe" নামে থাকলে সেটাকে "filemoon" হিসেবে ম্যাপ করা
+                        if (serverData.bysewihe) servers.filemoon = serverData.bysewihe;
+                        else if (serverData.filemoon) servers.filemoon = serverData.filemoon; // পুরনো ডেটার জন্য ফলব্যাক
+
                         if (serverData.servabyss) servers.servabyss = serverData.servabyss;
                         if (serverData.vidgroud) servers.vidgroud = serverData.vidgroud;
                     } catch {
-                        // Fallback to regex extraction
+                        // Fallback to regex extraction (যেহেতু JS Object স্ট্রিক্ট JSON নয়, তাই প্রায় সবসময় এই ব্লকেই ঢুকবে)
                         const extractEpisodes = (serverName: string): ServerVideo[] => {
-                            const pattern = new RegExp(`${serverName}:\\s*\\[([\\s\\S]*?)\\]`, "i");
+                            const pattern = new RegExp(`${serverName}\\s*:\\s*\\[([\\s\\S]*?)\\]`, "i");
                             const match = serverVideosStr.match(pattern);
 
                             if (match) {
                                 const episodesStr = match[1];
                                 const episodes: ServerVideo[] = [];
 
-                                const episodeMatches = episodesStr.matchAll(/\{\s*"name":\s*"([^"]+)"\s*,\s*"url":\s*"([^"]+)"\s*\}/g);
+                                // রেজেক্সে সিঙ্গেল বা ডাবল কোটেশন দুটোই হ্যান্ডেল করা হয়েছে
+                                const episodeMatches = episodesStr.matchAll(/["']?name["']?\s*:\s*["']([^"']+)["']\s*,\s*["']?url["']?\s*:\s*["']([^"']+)["']/g);
 
                                 for (const epMatch of episodeMatches) {
                                     episodes.push({
@@ -183,7 +183,13 @@ async function getAnimePage(slug: string): Promise<AnimePageData> {
                             return [];
                         };
 
-                        servers.filemoon = extractEpisodes("filemoon");
+                        // 🎯 FIX: প্রথমে "bysewihe" খুঁজবে, না পেলে "filemoon" খুঁজবে
+                        let extractedFilemoon = extractEpisodes("bysewihe");
+                        if (extractedFilemoon.length === 0) {
+                            extractedFilemoon = extractEpisodes("filemoon");
+                        }
+                        servers.filemoon = extractedFilemoon;
+
                         servers.servabyss = extractEpisodes("servabyss");
                         servers.vidgroud = extractEpisodes("vidgroud");
                     }
@@ -220,7 +226,6 @@ hindiDubbedRouter.get("/home", async (c) => {
 
         const featured: any[] = [];
 
-        // Parse Elementor figure/figcaption structure
         $("figure.wp-caption").each((_, figure) => {
             const $fig = $(figure);
             const link = $fig.find("a").attr("href");
@@ -310,7 +315,8 @@ hindiDubbedRouter.get("/anime/:slug", async (c) => {
 
 // ========== ROOT ==========
 hindiDubbedRouter.get("/", (c) => {
-    return c.json({ provider: "Tatakai",
+    return c.json({
+        provider: "Tatakai",
         status: 200,
         message: "AnimeHindiDubbed Scraper - Hindi Dubbed Anime",
         categories: ["hindi-anime-movies", "cartoon-shows", "love-romantic", "crunchiroll"],
