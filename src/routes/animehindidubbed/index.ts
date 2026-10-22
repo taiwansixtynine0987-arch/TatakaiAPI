@@ -51,6 +51,8 @@ async function fetchWithRetry(url: string, retries = 3): Promise<Response> {
                     "Referer": BASE_URL,
                 },
                 signal: AbortSignal.timeout(30000),
+                // 🎯 Redirect ফলো করবে, কিন্তু আমরা ফাইনাল URL চেক করব
+                redirect: "follow"
             });
 
             if (response.ok || (response.status >= 400 && response.status < 500 && response.status !== 429)) {
@@ -82,8 +84,9 @@ async function searchAnime(title: string): Promise<SearchResult> {
     const animeList: SearchResult["animeList"] = [];
 
     $("article, .post, .type-post").each((_, element) => {
-        const titleEl = $(element).find(".entry-title a, .post-title a, h2 a").first();
-        const title = titleEl.text().trim();
+        // 🎯 Fix 1: h3 a এবং h2 a দুটোই চেক করব
+        const titleEl = $(element).find(".entry-title a, .post-title a, h2 a, h3 a").first();
+        const titleText = titleEl.text().trim();
         const link = titleEl.attr("href");
 
         const img = $(element).find("img").attr("src")
@@ -97,9 +100,9 @@ async function searchAnime(title: string): Promise<SearchResult> {
 
         const slug = link?.match(/animehindidubbed\.in\/([^/]+)\/?/)?.[1];
 
-        if (title && link && slug) {
+        if (titleText && link && slug) {
             animeList.push({
-                title,
+                title: titleText,
                 slug,
                 url: link,
                 thumbnail: img,
@@ -124,7 +127,23 @@ async function getAnimePage(slug: string): Promise<AnimePageData> {
     const html = await response.text();
     const $ = cheerio.load(html);
 
-    const title = $("h1").first().text().trim() || slug.replace(/-/g, " ");
+    // 🎯 Fix 2: রোবাস্ট টাইটেল এক্সট্রাকশন (লোগো বাদ দেওয়া)
+    let title = $("h1.entry-title").first().text().trim();
+    if (!title) {
+        title = $("meta[property='og:title']").attr("content")?.trim() || "";
+    }
+    // যদি টাইটেলে "𝔸𝕟𝕚𝕞𝕖" (লোগো) থাকে, তবে ডিভের ভেতরের আসল h1 খুঁজব
+    if (!title || title.includes("𝔸𝕟𝕚𝕞𝕖")) {
+        $("h1").each((_, el) => {
+            const text = $(el).text().trim();
+            if (text && !text.includes("𝔸𝕟𝕚𝕞𝕖") && !$(el).find("img").length) {
+                title = text;
+                return false; // break
+            }
+        });
+    }
+    if (!title) title = slug.replace(/-/g, " ");
+
     const thumbnail = $('img[src*="wp-content"]').first().attr("src") ||
         $('meta[property="og:image"]').attr("content");
     const description = $("#short-desc").text().trim() ||
@@ -143,22 +162,20 @@ async function getAnimePage(slug: string): Promise<AnimePageData> {
 
         if (scriptContent.includes("serverVideos")) {
             try {
-                const serverVideosMatch = scriptContent.match(/const\s+serverVideos\s*=\s*({[\s\S]*?});/);
+                // 🎯 Fix 3: Regex আরও ফ্লেক্সিবল করা হলো (const, var, let)
+                const serverVideosMatch = scriptContent.match(/serverVideos\s*=\s*({[\s\S]*?});/);
 
                 if (serverVideosMatch) {
                     let serverVideosStr = serverVideosMatch[1].replace(/'/g, '"');
 
                     try {
                         const serverData = JSON.parse(serverVideosStr);
-
-                        // 🎯 FIX: ওয়েবসাইটে "bysewihe" নামে থাকলে সেটাকে "filemoon" হিসেবে ম্যাপ করা
                         if (serverData.bysewihe) servers.filemoon = serverData.bysewihe;
-                        else if (serverData.filemoon) servers.filemoon = serverData.filemoon; // পুরনো ডেটার জন্য ফলব্যাক
-
+                        else if (serverData.filemoon) servers.filemoon = serverData.filemoon; 
                         if (serverData.servabyss) servers.servabyss = serverData.servabyss;
                         if (serverData.vidgroud) servers.vidgroud = serverData.vidgroud;
                     } catch {
-                        // Fallback to regex extraction (যেহেতু JS Object স্ট্রিক্ট JSON নয়, তাই প্রায় সবসময় এই ব্লকেই ঢুকবে)
+                        // Regex Fallback (সবচেয়ে নির্ভরযোগ্য)
                         const extractEpisodes = (serverName: string): ServerVideo[] => {
                             const pattern = new RegExp(`${serverName}\\s*:\\s*\\[([\\s\\S]*?)\\]`, "i");
                             const match = serverVideosStr.match(pattern);
@@ -166,8 +183,7 @@ async function getAnimePage(slug: string): Promise<AnimePageData> {
                             if (match) {
                                 const episodesStr = match[1];
                                 const episodes: ServerVideo[] = [];
-
-                                // রেজেক্সে সিঙ্গেল বা ডাবল কোটেশন দুটোই হ্যান্ডেল করা হয়েছে
+                                // কোটেশন হ্যান্ডেল করা
                                 const episodeMatches = episodesStr.matchAll(/["']?name["']?\s*:\s*["']([^"']+)["']\s*,\s*["']?url["']?\s*:\s*["']([^"']+)["']/g);
 
                                 for (const epMatch of episodeMatches) {
@@ -176,14 +192,11 @@ async function getAnimePage(slug: string): Promise<AnimePageData> {
                                         url: epMatch[2],
                                     });
                                 }
-
                                 return episodes;
                             }
-
                             return [];
                         };
 
-                        // 🎯 FIX: প্রথমে "bysewihe" খুঁজবে, না পেলে "filemoon" খুঁজবে
                         let extractedFilemoon = extractEpisodes("bysewihe");
                         if (extractedFilemoon.length === 0) {
                             extractedFilemoon = extractEpisodes("filemoon");
@@ -201,7 +214,7 @@ async function getAnimePage(slug: string): Promise<AnimePageData> {
     });
 
     const totalEpisodes = servers.filemoon.length + servers.servabyss.length + servers.vidgroud.length;
-    log.info(`Found Hindi dubbed anime: ${title} with ${totalEpisodes} total episodes`);
+    log.info(`Found Hindi dubbed anime: ${title} (${slug}) with ${totalEpisodes} total episodes`);
 
     return {
         title,
