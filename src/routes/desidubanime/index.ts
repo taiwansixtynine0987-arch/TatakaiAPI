@@ -105,7 +105,7 @@ desidubanimeRouter.get("/home", async (c) => {
     return c.json({ provider: "Desidubanime", status: 200, data });
 });
 
-// ========== SEARCH (uses WP REST API endpoint) ==========
+// ========== SEARCH ==========
 desidubanimeRouter.get("/search/:query", async (c) => {
     const cacheConfig = c.get("CACHE_CONFIG");
     const query = c.req.param("query");
@@ -179,10 +179,10 @@ desidubanimeRouter.get("/search/:query", async (c) => {
     }
 });
 
-// ========== ANIME INFO (FIXED EPISODE EXTRACTION) ==========
+// ========== ANIME INFO (FIXED: returns realBaseName) ==========
 desidubanimeRouter.get("/anime/:id", async (c) => {
     const cacheConfig = c.get("CACHE_CONFIG");
-    const id = c.req.param("id");
+    const id = c.req.param("id"); // 🎯 Search থেকে আসা সঠিক স্লাগ (যেমন: naruto-shippuuden)
 
     const data = await cache.getOrSet(async () => {
         const url = `${BASE_URL}/anime/${id}/`;
@@ -205,19 +205,16 @@ desidubanimeRouter.get("/anime/:id", async (c) => {
 
         const epMap = new Map<number, any>();
         
-        // 🎯 FIX: স্পেসিফিক আইডি না খুঁজে, পেজের সব /watch/ লিংক খুঁজবো
         $("a[href*='/watch/']").each((_, el) => {
             const href = $(el).attr("href");
             if (!href) return;
             
-            // URL-এর শেষে episode-{number} আছে কি না চেক (যেমন: ...-episode-47/)
             const match = href.match(/(?:-episode-|\/episode-)(\d+)\/?$/i);
-            if (!match) return; // এপিসোড নাম্বার না থাকলে স্কিপ করবো
+            if (!match) return;
             
             const num = parseInt(match[1], 10);
             const epSlug = href.split("/watch/")[1]?.replace(/\/$/, "");
             
-            // ডুপ্লিকেট এপিসোড এড়াতে
             if (epSlug && !epMap.has(num)) {
                 epMap.set(num, {
                     number: num,
@@ -228,7 +225,6 @@ desidubanimeRouter.get("/anime/:id", async (c) => {
             }
         });
 
-        // Fallback: যদি কোনো episode-N প্যাটার্ন না পাওয়া যায় (যেমন: মুভি বা স্পেশাল)
         if (epMap.size === 0) {
             const watchLink = $(`a[href*='/watch/']`).first().attr("href");
             if (watchLink) {
@@ -246,13 +242,14 @@ desidubanimeRouter.get("/anime/:id", async (c) => {
 
         const episodes = Array.from(epMap.values()).sort((a, b) => a.number - b.number);
 
-        return { id, title, description, poster, episodes };
+        // 🎯 CRITICAL FIX: Search ID ফেরত দিচ্ছি (যাতে Proxy এটাই ব্যবহার করে)
+        return { id, realBaseName: id, title, description, poster, episodes };
     }, cacheConfig.key, cacheConfig.duration);
 
     return c.json({ provider: "Desidubanime", status: 200, data });
 });
 
-// ========== WATCH (unchanged) ==========
+// ========== WATCH ==========
 desidubanimeRouter.get("/watch/:id", async (c) => {
     const cacheConfig = c.get("CACHE_CONFIG");
     const id = c.req.param("id");
