@@ -10,17 +10,21 @@ const BASE_URL = "https://www.desidubanime.me";
 const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
 async function fetchHtml(url: string): Promise<string> {
-    log.info(`Fetching: ${url}`);
-    const response = await fetch(url, {
+    // 🎯 CRITICAL FIX: encodeURI handles unicode characters (like ½) without breaking slashes or hyphens
+    const safeUrl = encodeURI(url);
+    log.info(`Fetching: ${safeUrl}`);
+    
+    const response = await fetch(safeUrl, {
         headers: {
             "User-Agent": USER_AGENT,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
             "Referer": BASE_URL,
         },
     });
+    
     if (!response.ok) {
-        log.error(`Failed to fetch ${url}: ${response.status} ${response.statusText}`);
-        const error = new Error(`Failed to fetch ${url}`);
+        log.error(`Failed to fetch ${safeUrl}: ${response.status} ${response.statusText}`);
+        const error = new Error(`Failed to fetch ${safeUrl} (Status: ${response.status})`);
         (error as any).status = response.status;
         throw error;
     }
@@ -179,10 +183,10 @@ desidubanimeRouter.get("/search/:query", async (c) => {
     }
 });
 
-// ========== ANIME INFO (FIXED: returns realBaseName) ==========
+// ========== ANIME INFO ==========
 desidubanimeRouter.get("/anime/:id", async (c) => {
     const cacheConfig = c.get("CACHE_CONFIG");
-    const id = c.req.param("id"); // 🎯 Search থেকে আসা সঠিক স্লাগ (যেমন: naruto-shippuuden)
+    const id = c.req.param("id"); 
 
     const data = await cache.getOrSet(async () => {
         const url = `${BASE_URL}/anime/${id}/`;
@@ -242,7 +246,6 @@ desidubanimeRouter.get("/anime/:id", async (c) => {
 
         const episodes = Array.from(epMap.values()).sort((a, b) => a.number - b.number);
 
-        // 🎯 CRITICAL FIX: Search ID ফেরত দিচ্ছি (যাতে Proxy এটাই ব্যবহার করে)
         return { id, realBaseName: id, title, description, poster, episodes };
     }, cacheConfig.key, cacheConfig.duration);
 
