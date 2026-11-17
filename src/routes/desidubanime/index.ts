@@ -42,7 +42,69 @@ function decodeEmbedId(raw: string): { server: string; url: string } | null {
     }
 }
 
-// ... (HOME route একই থাকবে, কোনো পরিবর্তন নেই)
+// ========== HOME ==========
+desidubanimeRouter.get("/home", async (c) => {
+    const cacheConfig = c.get("CACHE_CONFIG");
+
+    const data = await cache.getOrSet(async () => {
+        const html = await fetchHtml(BASE_URL);
+        const $ = cheerio.load(html);
+
+        const spotlight: any[] = [];
+        const trending: any[] = [];
+        const latest: any[] = [];
+
+        $(".swiper-slide").each((_, slide) => {
+            const title = $(slide).find("h2 span[data-nt-title], h2 span[data-en-title]").first().text().trim();
+            const description = $(slide).find(".text-\\[13px\\].line-clamp-2").text().trim();
+            const poster = $(slide).find("img").attr("data-src") || $(slide).find("img").attr("src");
+            const link = $(slide).find("a[href*='/anime/']").attr("href");
+            const id = link?.split("/anime/")[1]?.replace(/\/$/, "");
+
+            if (title && id) {
+                spotlight.push({ id, title, description, poster, url: link, isDub: true });
+            }
+        });
+
+        $(".swiper-trending .swiper-slide").each((_, slide) => {
+            const title = $(slide).find("span[data-nt-title], span[data-en-title]").first().text().trim();
+            const poster = $(slide).find("img").attr("data-src") || $(slide).find("img").attr("src");
+            const link = $(slide).find("a").attr("href");
+            const id = link?.split("/anime/")[1]?.replace(/\/$/, "");
+            const rank = $(slide).find("span.absolute").text().trim();
+
+            if (title && id) {
+                trending.push({ id, title, poster, url: link, rank: parseInt(rank) || undefined });
+            }
+        });
+
+        $("section").each((_, section) => {
+            const sectionTitle = $(section).find("h2").text().trim();
+            if (sectionTitle.includes("Trending") || sectionTitle.includes("Spotlight")) return;
+
+            const items: any[] = [];
+            $(section).find("li.odd\\:bg-tertiary, .grid div").each((_, item) => {
+                const link = $(item).find("a").attr("href");
+                const title = $(item).find("h3, .dynamic-name").text().trim();
+                const poster = $(item).find("img").attr("data-src") || $(item).find("img").attr("src");
+                const id = link?.split("/anime/")[1]?.replace(/\/$/, "");
+                const ep = $(item).find("span:contains('E ')").text().trim().replace("E ", "");
+
+                if (title && id) {
+                    items.push({ id, title, poster, url: link, latestEpisode: ep ? parseInt(ep) : undefined });
+                }
+            });
+
+            if (items.length > 0) {
+                latest.push({ title: sectionTitle, items });
+            }
+        });
+
+        return { spotlight, trending, latest };
+    }, cacheConfig.key, cacheConfig.duration);
+
+    return c.json({ provider: "Desidubanime", status: 200, data });
+});
 
 // ========== SEARCH ==========
 desidubanimeRouter.get("/search/:query", async (c) => {
